@@ -271,10 +271,17 @@ python scripts/generate_dataset.py
 
 ## Special Thanks
 Dr. Ki Ha Lee
+
 Dr. Yoonho Song
+
 Dr. Hyoung-Seok Kwon
+
 Dr. Soon Jee Seol
+
 Prof. Seogi Kang
+
 Dr. Soocheol Jeong
+
 Dr. Kyubo Noh
+
 Dr. Seokmin Oh
