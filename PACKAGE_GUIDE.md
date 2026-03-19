@@ -141,25 +141,323 @@ SourceType.Mz  # 수직 자기 쌍극자 (VMD) ← 이번 검증에서 사용
 → 3D 결과를 2D 계산만으로 얻는 효율적 방법
 ```
 
----
-
 ## 6. inverse/ — 역산 (측정 데이터 → 지하 구조 추정)
 
+### 역산이란?
+
+순방향 모델링이 "지하 구조가 주어졌을 때 측정값을 계산"하는 것이라면,
+역산은 반대로 **"측정값으로부터 지하 구조를 추정"**하는 과정입니다.
+
 ```
-관측 데이터 ──→ 역산 알고리즘 ──→ 추정된 비저항 모델
-  (실측값)      (반복 최적화)       (지하 구조)
+순방향 (Forward):    지하 모델 ρ  ──→  계산 데이터 d_pred
+역산 (Inverse):     관측 데이터 d_obs ──→  추정 모델 ρ*
 ```
 
-| 파일 | 역할 | 설명 |
-|------|------|----------|
-| **jacobian.py** | 감도 행렬 | "각 블록의 비저항이 바뀌면 측정값이 얼마나 변하는가" (상반정리 활용) |
-| **regularization.py** | 정규화 | 해가 너무 울퉁불퉁하지 않도록 부드럽게 만드는 제약 조건 |
-| **acb.py** | ACB 역산 | Active Constraint Balancing — 모델 업데이트 계산 |
-| **measures.py** | 목적함수 | L1/L2/Huber/Ekblom Norm — 잡음에 강건한 오차 측정 |
-| **sequence.py** | 시퀀스 제약 | 인접 주파수 간 결과의 연속성 보장 |
-| **inversion_loop.py** | 반복 루프 | 순방향 → 자코비안 → 모델 갱신 → 수렴 검사 반복 |
+역산은 본질적으로 **비선형 최적화 문제**입니다.
+관측값과 계산값의 차이(잔차)를 최소화하되,
+해가 물리적으로 의미 있도록 **정규화(Regularization)**를 적용합니다.
+
+### 역산 전체 흐름
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  초기 모델 ρ₀ (균질 배경 또는 이전 결과)                             │
+└──────────────────────┬─────────────────────────────────────────────┘
+                       ▼
+       ┌──────────── 반복 루프 (iter = 1, 2, ..., N) ────────────┐
+       │                                                          │
+       │  ① 순방향 모델링                                          │
+       │     ρ_iter → ForwardModeling → d_pred                    │
+       │                                                          │
+       │  ② 잔차 계산                                              │
+       │     r = (d_obs − d_pred) / norm_factor                   │
+       │     RMS = √(mean(r²))                                    │
+       │                                                          │
+       │  ③ 자코비안(감도 행렬) 계산                                │
+       │     J[i,b] = ∂d_i / ∂log(ρ_b)  ← 상반정리 활용           │
+       │                                                          │
+       │  ④ IRLS 가중치 계산                                       │
+       │     W_d = f(r)       ← 데이터 가중치 (잡음 강건)           │
+       │     W_m = f(R·m)     ← 모델 가중치 (구조 강건)             │
+       │                                                          │
+       │  ⑤ ACB 라그랑주 승수 계산                                  │
+       │     H = J^T W_d J    ← 헤시안 (근사)                      │
+       │     λ_i ∝ spread_i   ← 해상도 낮은 블록은 더 강하게 제약    │
+       │                                                          │
+       │  ⑥ 정규화 정규방정식 풀이                                   │
+       │     (H + R̃^T R̃) Δm = J^T W_d r                         │
+       │                                                          │
+       │  ⑦ 모델 갱신                                              │
+       │     ρ_new = clip(ρ + Δm, [ρ_min, ρ_max])                 │
+       │                                                          │
+       │  ⑧ 수렴 검사                                              │
+       │     RMS ≤ 목표? 또는 ΔRMS < 최소 변화?                     │
+       │     → 예: 종료                                            │
+       │     → 아니오: iter += 1, ①로 복귀                          │
+       └──────────────────────────────────────────────────────────┘
+                       ▼
+       ┌─────────────────────────────────────────────────────────┐
+       │  결과: 최종 비저항 모델 ρ* + 수렴 이력 + 로그 파일        │
+       └─────────────────────────────────────────────────────────┘
+```
+
+### 각 파일의 역할
+
+| 파일 | 단계 | Fortran 대응 | 역할 |
+|------|------|-------------|------|
+| **measures.py** | ④ | Fem25D_Measures.f90 | 목적함수(Norm) 및 IRLS 가중치 |
+| **jacobian.py** | ③ | Fem25DjacReci.f90 | 상반정리 기반 자코비안 행렬 |
+| **regularization.py** | ⑤⑥ | Fem25Dinv.f90 | Occam 평활화 행렬 (정규화) |
+| **acb.py** | ④⑤⑥⑦ | Fem25Dacb.f90 | ACB 역산 스텝 (정규방정식 풀이) |
+| **sequence.py** | ⑥ | Fem25DSequence.f90 | 다중 주파수 시퀀스 제약 |
+| **inversion_loop.py** | 전체 | Fem25Dinv.f90 | 반복 루프 제어, 로깅, 수렴 판정 |
 
 ---
+
+### 6.1 measures.py — 목적함수와 IRLS 가중치
+
+역산의 목적함수(misfit)를 정의하고, 잡음에 강건한 **IRLS(Iteratively Reweighted Least Squares)** 가중치를 계산합니다.
+
+```
+목적함수 선택: "잔차를 어떤 기준으로 측정할 것인가?"
+
+L2 (최소제곱):    φ = Σ rᵢ²          ← 가장 기본, 잡음에 민감
+L1 (Ekblom):     φ = Σ √(rᵢ²+ε²)   ← 이상치(outlier)에 강건
+Huber:           φ = { rᵢ²/2ε      (|rᵢ| ≤ ε)     ← L2/L1 절충
+                     { |rᵢ| - ε/2   (|rᵢ| > ε)
+Minimum Support: φ = Σ rᵢ²/(rᵢ²+ε²) ← 희소(sparse) 해 유도
+```
+
+IRLS는 비선형 Norm을 **가중 최소제곱**으로 변환하는 기법입니다:
+```
+L1 가중치:    wᵢ = 1 / √(rᵢ² + ε²)     ← 큰 잔차에 낮은 가중치
+Huber 가중치: wᵢ = 1/(2ε) 또는 1/(2|rᵢ|) ← 임계값 기준 전환
+```
+
+데이터 잔차와 모델 구조 양쪽 모두에 IRLS를 적용할 수 있습니다.
+
+---
+
+### 6.2 jacobian.py — 감도 행렬 (자코비안)
+
+**"블록 b의 비저항이 변하면 데이터 i가 얼마나 변하는가?"**
+
+```
+J[i, b] = ∂dᵢ / ∂log(ρ_b) = -σ_b ∫∫_Ωb E_fwd(r) · E_adj(r) dA
+```
+
+- `E_fwd`: 송신기에 의한 전기장 (순방향 풀이 결과)
+- `E_adj`: 수신기를 가상 소스로 놓았을 때의 전기장 (**상반정리**)
+
+상반정리를 쓰면 **TX×RX 조합마다 별도 풀이 없이** 감도를 구할 수 있어,
+수치 유한차분(perturbation)보다 훨씬 효율적입니다.
+
+```
+상반정리 (Reciprocity):
+  송신기→수신기 경로의 감도 = 수신기→송신기 경로의 감도
+  → 수신기에 가상 소스를 놓고 한 번 더 순방향 풀이
+  → 모든 TX-RX 조합의 감도를 동시에 계산
+```
+
+**계산 절차:**
+```
+1. ky 영역에서 각 요소에 대해 E_fwd · E_adj 면적분 (bilinear 구적법)
+2. 모든 ky에서의 적분 결과를 역 Fourier 변환 (사다리꼴 공식)
+3. 비저항 파라미터 변환 적용 (log 스케일링)
+```
+
+**비저항 파라미터 변환 (Jacobian scaling):**
+```
+fac_b = σ_b · log(σ_max / σ_b) · log(σ_b / σ_min) / log(σ_max / σ_min)
+```
+이 변환은 비저항의 상·하한 제약(ρ_min, ρ_max)을 자동으로 만족시킵니다.
+
+---
+
+### 6.3 regularization.py — 정규화 (Occam 평활화)
+
+역산 문제는 **비유일성(non-uniqueness)**이 심합니다 —
+같은 관측 데이터를 설명하는 지하 모델이 무수히 많습니다.
+정규화는 이 중에서 **가장 매끄러운(smooth) 해**를 선택하도록 강제합니다.
+
+**Roughening(거칠기) 행렬 R:**
+```
+                 인접 블록과의 차이를 벌점으로 부과
+
+  블록 배치 (n_x × n_z):           Roughening 행렬 R:
+  ┌───┬───┬───┐                    R[k, k]     = 1 (자기 자신)
+  │ 0 │ 1 │ 2 │ ← z행 0           R[k, 위/아래] = -w · Sm_V
+  ├───┼───┼───┤                    R[k, 좌/우]   = -w · Sm_H
+  │ 3 │ 4 │ 5 │ ← z행 1           w = 1 / 이웃 수 (꼭짓점 2, 변 3, 내부 4)
+  ├───┼───┼───┤
+  │ 6 │ 7 │ 8 │ ← z행 2           Sm_V, Sm_H: 수직/수평 평활 강도
+  └───┴───┴───┘
+   x열0 x열1 x열2
+
+  블록 인덱스: k = j·n_z + i (j=x열, i=z행)
+```
+
+**모델 구조 벡터:**
+```
+Rm = R · log(ρ)    ← "인접 블록 간 비저항 차이"의 가중합
+```
+
+Rm이 작을수록 모델이 매끄럽습니다. 목적함수에 `||W_m · Rm||²` 항을 추가하여
+데이터 적합과 모델 부드러움 사이의 균형을 맞춥니다.
+
+---
+
+### 6.4 acb.py — ACB 역산 스텝
+
+**ACB(Active Constraint Balancing)**는 블록마다 개별적인 정규화 강도를 부여합니다.
+
+```
+기존 Occam:                      ACB:
+  모든 블록에 동일한 λ 적용         각 블록 i에 λ_i 개별 적용
+  → 해상도 높은 곳도 과도한 평활    → 해상도 기반 적응형 제약
+
+해상도가 높은 블록 (데이터 감도 큼):   λ_i 작음 → 자유롭게 변화 허용
+해상도가 낮은 블록 (데이터 감도 작음): λ_i 큼  → 강하게 평활화
+```
+
+**ACB 라그랑주 승수 계산 절차:**
+```
+1. 헤시안:     H = J^T · W_d · J
+2. 감쇠 역행렬: H_inv = (H + δ·I)^(-1)
+3. 해상도 행렬: R_res = H_inv · H          ← 대각이 1에 가까우면 해상도 높음
+4. 확산 함수:   spr_i = Σ_j d²(i,j) · R_res[i,j]²  +  (1 - R_res[i,i])²
+               (d(i,j) = 격자 상 블록 간 거리)
+5. 라그랑주:   λ_i = 10^(slope · (log(spr_i) - log(spr_min)) + log(λ_min))
+```
+
+**정규방정식:**
+```
+(J^T W_d J  +  R̃^T R̃) · Δm  =  J^T W_d r
+
+여기서:
+  R̃[i, :] = √(λ_i · w_m_i) · R[i, :]    ← ACB + IRLS로 행별 스케일링
+  Δm = 모델 갱신 벡터
+  r = 정규화된 잔차
+```
+
+**비저항 갱신:**
+```
+log-변환 파라미터: m_i = log((σ_i - σ_min) / (σ_max - σ_i))
+  → ρ_min ≤ ρ ≤ ρ_max 자동 보장 (별도 클리핑 불필요)
+
+갱신 모드:
+  Jumping:  ρ_new = 변환(m + Δm)          ← 공격적, 빠른 수렴
+  Creeping: ρ_new = 0.5·ρ_old + 0.5·변환   ← 안정적, 느린 수렴
+```
+
+---
+
+### 6.5 sequence.py — 다중 주파수 시퀀스 제약
+
+인접 주파수 간 데이터의 **연속성**을 강제하는 추가 제약입니다.
+
+```
+주파수 f₁, f₂, f₃ 에서의 데이터:
+
+  d(f₁) ≈ d(f₂) ≈ d(f₃)  ← 급격한 변화 억제
+
+시퀀스 잔차:
+  r_seq = S_pred · d_pred - S_obs · d_obs
+
+  S는 차분 연산자: 인접 주파수 간 차이를 계산
+  각 수신기별로 (n_freq - 1)개의 제약 생성
+```
+
+이 제약은 정규방정식에 추가 항으로 들어갑니다:
+```
+H_total = H + H_seq     (H_seq = J^T S_w^T S_w J)
+g_total = g + g_seq     (g_seq = J^T S_w^T (w · r_seq))
+```
+
+---
+
+### 6.6 inversion_loop.py — 역산 반복 루프
+
+전체 역산 프로세스를 제어하는 **오케스트레이터**입니다.
+
+**InversionConfig — 주요 설정:**
+```python
+InversionConfig(
+    max_iterations = 10,        # 최대 반복 횟수
+    iteration_type = "jumping",  # "jumping" (공격적) / "creeping" (안정적)
+
+    # 사용할 데이터 성분 (0=미사용, 1=허수부만, 2=실수+허수)
+    use_Ey = 0, use_Hx = 0, use_Hz = 1,  # Hz만 사용하는 예
+
+    # IRLS Norm
+    norm_data  = NormType.L2,   # 데이터 잔차 Norm
+    norm_model = NormType.L2,   # 모델 구조 Norm
+    irls_start = 1,             # IRLS 적용 시작 반복
+
+    # 비저항 범위 제약
+    rho_min = 0.1,  rho_max = 1e5,  # [Ω·m]
+
+    # 정규화
+    use_acb = True,             # ACB 사용 여부
+    smoothness_v = 0.5,         # 수직 평활 강도
+    smoothness_h = 0.5,         # 수평 평활 강도
+
+    # 수렴 조건
+    target_rms = 1.0,           # 목표 RMS (1.0 = 잡음 수준)
+    min_delta_rms = 1e-4,       # 최소 RMS 변화 (정체 판정)
+)
+```
+
+**로깅:**
+```
+inversion_log/
+└── run_260319_143022/
+    ├── misfit_log.csv         ← (반복, rms_data, rms_model, step_size)
+    ├── model_iter_001.dat     ← 각 반복의 비저항 모델
+    ├── model_iter_002.dat
+    ├── ...
+    └── model_final.dat        ← 최종 결과
+```
+
+---
+
+### 6.7 모듈 간 데이터 흐름
+
+```
+inversion_loop.py (오케스트레이터)
+│
+├── forward/ → 순방향 모델링 → d_pred
+│
+├── select_data_components()
+│   → (d_pred, d_obs, norm_factor) 추출
+│
+├── compute_residual() → 정규화된 잔차 r
+│
+├── jacobian.py
+│   ├── element_surface_integral()  ← ky 영역 면적분
+│   ├── compute_field_components()  ← Maxwell 관계식
+│   ├── jacobian_inverse_fourier()  ← ky → 공간 영역
+│   └── apply_resistivity_transform() ← log(ρ) 스케일링
+│   → 자코비안 J (n_data × n_blocks)
+│
+├── acb.py:inversion_step()
+│   ├── measures.py:compute_irls_weights()  ← W_d, W_m
+│   ├── regularization.py
+│   │   ├── build_roughening_matrix()       ← R
+│   │   ├── compute_model_structure()       ← Rm = R·log(ρ)
+│   │   └── scale_roughening_matrix()       ← R̃ = √(λ·w)·R
+│   ├── compute_acb_lagrangian()            ← λ_ACB
+│   ├── solve_normal_equations()            ← Δm
+│   └── line_search_step_size()             ← ρ_new
+│
+├── [선택] sequence.py
+│   └── compute_sequence_contribution()     ← (H_seq, g_seq)
+│
+└── InversionLogger → CSV + 모델 스냅샷
+```
+
+---
+
 
 ## 7. parallel/ — 병렬화 (빠르게 계산하기)
 
