@@ -150,7 +150,7 @@ SourceType.Mz  # 수직 자기 쌍극자 (VMD) ← 이번 검증에서 사용
 │         zgbtrf (banded LU) 또는 ILU 전처리                          │
 │         → 이후 22개 TX에 대해 solve만 반복 (매우 빠름)               │
 │                                                                     │
-│      ┌── for tx in [TX₁, ..., TX₂₂]:         ← 22개 송신기         │
+│      ┌── for tx in [TX₁, ..., TX₂₂]:         ← 22개 송신기 예시     │
 │      │                                                              │
 │      │   ④ 1차장 계산                                               │
 │      │      균질 매질에서의 해석해 (Bessel K₀, K₁ 함수)              │
