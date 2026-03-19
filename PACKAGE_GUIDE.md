@@ -222,21 +222,21 @@ python scripts/generate_dataset.py
 └──────────────────────┬──────────────────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────────────────┐
-│              순방향 모델링 (Forward)                     │
+│              순방향 모델링 (Forward)                    │
 │                                                         │
 │   for freq in [220, 440, ..., 28160]:                   │
-│     for ky in [ky_1, ky_2, ..., ky_20]:  ← MPI 분배    │
-│       K 행렬 조립 (1회)                                  │
-│       Robin BC 적용                                      │
-│       ILU 전처리 (1회)                                   │
-│       for tx in [TX_1, ..., TX_22]:                      │
-│         1차장 계산                                       │
-│         solution벡터 f 조립                             │
+│     for ky in [ky_1, ky_2, ..., ky_20]:  ← MPI 분배     │
+│       K 행렬 조립 (1회)                                 │
+│       Robin BC 적용                                     │
+│       ILU 전처리 (1회)                                  │
+│       for tx in [TX_1, ..., TX_22]:                     │
+│         1차장 계산                                      │
+│         Force 벡터 f 조립                               │
 │         GMRES 풀이 → Ey_s, Hy_s                         │
 │         후처리 → Ex, Ez, Hx, Hz (프로파일 노드만)       │
-│     MPI REDUCE (ky 결과 합산)                            │
+│     MPI REDUCE (ky 결과 합산)                           │
 │     역 Fourier 변환 (ky → 공간)                         │
-│     1차장 더하기 (total = secondary + primary)           │
+│     1차장 더하기 (total = secondary + primary)          │
 └──────────────────────┬──────────────────────────────────┘
                        ▼
 ┌─────────────────────────────────────────────────────────┐
