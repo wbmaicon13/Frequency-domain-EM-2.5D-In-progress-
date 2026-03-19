@@ -267,3 +267,14 @@ python scripts/generate_dataset.py
 | **자코비안** | 감도 행렬 — 모델 변화 → 데이터 변화 관계 (역산에 필수) |
 | **ACB** | Active Constraint Balancing — 역산 알고리즘 |
 | **IRLS** | 반복 재가중 최소제곱법 — 잡음에 강건한 역산 |
+
+
+## Special Thanks
+Dr. Ki Ha Lee
+Dr. Yoonho Song
+Dr. Hyoung-Seok Kwon
+Dr. Soon Jee Seol
+Prof. Seogi Kang
+Dr. Soocheol Jeong
+Dr. Kyubo Noh
+Dr. Seokmin Oh
