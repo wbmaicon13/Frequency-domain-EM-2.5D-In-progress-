@@ -231,7 +231,7 @@ python scripts/generate_dataset.py
 │       ILU 전처리 (1회)                                   │
 │       for tx in [TX_1, ..., TX_22]:                      │
 │         1차장 계산                                       │
-│         힘벡터 f 조립                                    │
+│         solution벡터 f 조립                             │
 │         GMRES 풀이 → Ey_s, Hy_s                         │
 │         후처리 → Ex, Ez, Hx, Hz (프로파일 노드만)       │
 │     MPI REDUCE (ky 결과 합산)                            │
